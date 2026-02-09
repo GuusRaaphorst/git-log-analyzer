@@ -103,16 +103,28 @@ app.get('/api/analyze', async (req, res) => {
     }
     const stats = calculateStats(commits);
 
-    // Current tree: file count per top-level folder (for "size by folder")
+    // Current tree: file count per top-level folder and per folder/subfolder; full tree for drill-down
     const { stdout: lsTreeOut } = await execFileAsync('git', [
       'ls-tree', '-r', '--name-only', 'HEAD'
     ], { cwd: repoPath, maxBuffer: EXEC_MAX_BUFFER });
     const folderFileCounts = getFolderFileCounts(lsTreeOut);
+    const folderSubfolderFileCounts = getFolderSubfolderFileCounts(lsTreeOut);
+    const fullFolderTree = getFullFolderTree(lsTreeOut);
+
+    // Merge line stats (from history) into full tree folder stats
+    const byFolderPath = stats.byFolderPath || {};
+    Object.keys(fullFolderTree.folderStats).forEach(path => {
+      const lineStats = byFolderPath[path] || { additions: 0, deletions: 0 };
+      fullFolderTree.folderStats[path].additions = lineStats.additions || 0;
+      fullFolderTree.folderStats[path].deletions = lineStats.deletions || 0;
+    });
 
     res.json({
       commits,
       stats,
       folderFileCounts,
+      folderSubfolderFileCounts,
+      fullFolderTree,
       totalCommits: commits.length,
       totalFiles: stats.totalFiles,
       totalAdditions: stats.totalAdditions,
@@ -256,6 +268,62 @@ function getFolderFileCounts(lsTreeOutput) {
     .sort((a, b) => b.files - a.files);
 }
 
+// One level deeper: folder/subfolder (e.g. src/ProjectA) for "per project" view
+function getFolderSubfolderFileCounts(lsTreeOutput) {
+  const byKey = {};
+  lsTreeOutput.split('\n').forEach(line => {
+    const name = line.trim();
+    if (!name) return;
+    const parts = name.split('/');
+    const key = parts.length >= 2 ? parts.slice(0, 2).join('/') : (parts[0] || '(root)');
+    byKey[key] = (byKey[key] || 0) + 1;
+  });
+  return Object.entries(byKey)
+    .map(([folderSubfolder, files]) => ({ folderSubfolder, files }))
+    .sort((a, b) => b.files - a.files);
+}
+
+// Full tree: every folder path with file count and direct children (folders + files)
+function getFullFolderTree(lsTreeOutput) {
+  const allPaths = lsTreeOutput.split('\n').map(l => l.trim()).filter(Boolean);
+  const folderStats = {};
+  const folderPaths = new Set();
+
+  allPaths.forEach(filePath => {
+    const parts = filePath.split('/');
+    if (parts.length === 1) return; // root-level file, no folder
+    for (let i = 0; i < parts.length - 1; i++) {
+      const folderPath = parts.slice(0, i + 1).join('/');
+      folderPaths.add(folderPath);
+      folderStats[folderPath] = (folderStats[folderPath] || 0) + 1;
+    }
+  });
+
+  const rootFolders = [...folderPaths].filter(p => !p.includes('/')).sort();
+  const rootFiles = allPaths.filter(p => !p.includes('/')).sort();
+
+  const folderChildren = {};
+  folderPaths.forEach(folderPath => {
+    const prefix = folderPath + '/';
+    const directChildFolders = [...folderPaths]
+      .filter(p => p.startsWith(prefix) && p.slice(prefix.length).indexOf('/') === -1)
+      .sort();
+    const directChildFiles = allPaths
+      .filter(p => p.startsWith(prefix) && p.slice(prefix.length).indexOf('/') === -1)
+      .map(p => p.slice(prefix.length))
+      .sort();
+    folderChildren[folderPath] = { folders: directChildFolders, files: directChildFiles };
+  });
+
+  return {
+    folderStats: Object.fromEntries(
+      Object.entries(folderStats).map(([path, files]) => [path, { files }])
+    ),
+    folderChildren,
+    root: { folders: rootFolders, files: rootFiles }
+  };
+}
+
 function calculateStats(commits) {
   const stats = {
     totalFiles: new Set(),
@@ -264,7 +332,9 @@ function calculateStats(commits) {
     byDate: {},
     byAuthor: {},
     byExtension: {},
-    byFolder: {}
+    byFolder: {},
+    byFolderSubfolder: {},
+    byFolderPath: {} // every path prefix (for full tree): { path -> { additions, deletions } }
   };
 
   // Merge authors by email (case-insensitive); track name counts to pick display name
@@ -350,6 +420,37 @@ function calculateStats(commits) {
       stats.byFolder[folder].deletions += file.deletions;
     });
 
+    // By folder/subfolder (one level deeper, e.g. src/ProjectA for lines per project)
+    commit.files.forEach(file => {
+      const parts = file.filename.split('/');
+      const key = parts.length >= 2 ? parts.slice(0, 2).join('/') : (parts[0] || '(root)');
+      if (!stats.byFolderSubfolder[key]) {
+        stats.byFolderSubfolder[key] = {
+          folderSubfolder: key,
+          files: 0,
+          additions: 0,
+          deletions: 0
+        };
+      }
+      stats.byFolderSubfolder[key].files += 1;
+      stats.byFolderSubfolder[key].additions += file.additions;
+      stats.byFolderSubfolder[key].deletions += file.deletions;
+    });
+
+    // By every folder path prefix (for full tree drill-down)
+    commit.files.forEach(file => {
+      const parts = file.filename.split('/');
+      if (parts.length <= 1) return;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const folderPath = parts.slice(0, i + 1).join('/');
+        if (!stats.byFolderPath[folderPath]) {
+          stats.byFolderPath[folderPath] = { additions: 0, deletions: 0 };
+        }
+        stats.byFolderPath[folderPath].additions += file.additions;
+        stats.byFolderPath[folderPath].deletions += file.deletions;
+      }
+    });
+
     // Totals
     commit.files.forEach(file => stats.totalFiles.add(file.filename));
     stats.totalAdditions += commit.additions;
@@ -366,7 +467,11 @@ function calculateStats(commits) {
     byExtension: Object.values(stats.byExtension),
     byFolder: Object.values(stats.byFolder).sort((a, b) => 
       (b.additions + b.deletions) - (a.additions + a.deletions)
-    )
+    ),
+    byFolderSubfolder: Object.values(stats.byFolderSubfolder).sort((a, b) =>
+      (b.additions + b.deletions) - (a.additions + a.deletions)
+    ),
+    byFolderPath: stats.byFolderPath
   };
 }
 

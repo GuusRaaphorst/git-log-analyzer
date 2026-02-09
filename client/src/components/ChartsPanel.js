@@ -14,6 +14,7 @@ import {
   Legend,
   ResponsiveContainer
 } from 'recharts';
+import FolderTree from './FolderTree';
 import './ChartsPanel.css';
 
 const COLORS = ['#667eea', '#764ba2', '#f093fb', '#4facfe', '#00f2fe', '#43e97b', '#fa709a', '#fee140', '#30cfd0', '#a8edea'];
@@ -51,15 +52,6 @@ function ChartsPanel({ data }) {
       additions: ext.additions,
       deletions: ext.deletions
     }));
-
-  // Folder stats: file count (current tree) and lines changed (from history)
-  const folderFileCounts = data.folderFileCounts || [];
-  const folderLinesData = (stats.byFolder || []).map(f => ({
-    folder: f.folder,
-    additions: f.additions,
-    deletions: f.deletions,
-    total: f.additions + f.deletions
-  }));
 
   return (
     <div className="charts-panel">
@@ -181,68 +173,30 @@ function ChartsPanel({ data }) {
         </div>
       </div>
 
-      <div className="charts-grid charts-grid-full">
-        <div className="chart-card card">
-          <h3>File Extensions Distribution</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={extensionData}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                outerRadius={100}
-                fill="#8884d8"
-                dataKey="files"
-              >
-                {extensionData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="chart-card card">
-          <h3>Files per Folder (current tree)</h3>
-          <p className="chart-hint">Size of top-level folders by file count</p>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={folderFileCounts} margin={{ top: 5, right: 20, left: 20, bottom: 60 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="folder" angle={-45} textAnchor="end" height={60} tick={{ fontSize: 11 }} />
-              <YAxis allowDecimals={false} />
-              <Tooltip />
-              <Bar dataKey="files" fill="#30cfd0" name="Files" radius={[2, 2, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+      <div className="chart-card card">
+        <h3>File Extensions Distribution</h3>
+        <ResponsiveContainer width="100%" height={300}>
+          <PieChart>
+            <Pie
+              data={extensionData}
+              cx="50%"
+              cy="50%"
+              labelLine={false}
+              label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+              outerRadius={100}
+              fill="#8884d8"
+              dataKey="files"
+            >
+              {extensionData.map((entry, index) => (
+                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+              ))}
+            </Pie>
+            <Tooltip />
+          </PieChart>
+        </ResponsiveContainer>
       </div>
 
-      {folderLinesData.length > 0 && (
-        <div className="chart-card card">
-          <h3>Lines Changed per Folder</h3>
-          <p className="chart-hint">Activity by top-level folder (additions + deletions in history)</p>
-          <div className="chart-scroll-wrapper">
-            <div
-              className="chart-scroll-inner chart-scroll-inner-sm"
-              style={{ minWidth: Math.max(600, folderLinesData.length * 70) }}
-            >
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={folderLinesData} margin={{ top: 5, right: 30, left: 20, bottom: 60 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="folder" angle={-45} textAnchor="end" height={60} tick={{ fontSize: 11 }} />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="additions" stackId="a" fill="#48bb78" name="Additions" radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="deletions" stackId="a" fill="#f56565" name="Deletions" radius={[2, 2, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-      )}
+      <FolderTree data={data} />
     </div>
   );
 }
